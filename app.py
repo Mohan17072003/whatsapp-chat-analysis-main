@@ -1,79 +1,137 @@
 import streamlit as st
-import os
-from langchain_groq import ChatGroq
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains import create_retrieval_chain
-from langchain_community.vectorstores import FAISS
-from langchain_community.document_loaders import PyPDFDirectoryLoader
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from dotenv import load_dotenv
-import os
-load_dotenv()
+import preprocessor,helper
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-## load the GROQ And OpenAI API KEY 
-groq_api_key=os.getenv('GROQ_API_KEY')
-os.environ["GOOGLE_API_KEY"]=os.getenv("GOOGLE_API_KEY")
+st.sidebar.title("Whatsapp Chat Analyzer")
 
-st.title("Gemma Model Document Q&A")
+uploaded_file = st.sidebar.file_uploader("Choose a file")
+if uploaded_file is not None:
+    bytes_data = uploaded_file.getvalue()
+    data = bytes_data.decode("utf-8")
+    df = preprocessor.preprocess(data)
 
-llm=ChatGroq(groq_api_key=groq_api_key,
-             model_name="Llama3-8b-8192")
+    # fetch unique users
+    user_list = df['user'].unique().tolist()
+    user_list.remove('group_notification')
+    user_list.sort()
+    user_list.insert(0,"Overall")
 
-prompt=ChatPromptTemplate.from_template(
-"""
-Answer the questions based on the provided context only.
-Please provide the most accurate response based on the question
-<context>
-{context}
-<context>
-Questions:{input}
+    selected_user = st.sidebar.selectbox("Show analysis wrt",user_list)
 
-"""
-)
+    if st.sidebar.button("Show Analysis"):
 
-def vector_embedding():
+        # Stats Area
+        num_messages, words, num_media_messages, num_links = helper.fetch_stats(selected_user,df)
+        st.title("Top Statistics")
+        col1, col2, col3, col4 = st.columns(4)
 
-    if "vectors" not in st.session_state:
+        with col1:
+            st.header("Total Messages")
+            st.title(num_messages)
+        with col2:
+            st.header("Total Words")
+            st.title(words)
+        with col3:
+            st.header("Media Shared")
+            st.title(num_media_messages)
+        with col4:
+            st.header("Links Shared")
+            st.title(num_links)
 
-        st.session_state.embeddings=GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
-        st.session_state.loader=PyPDFDirectoryLoader("./us_census") ## Data Ingestion
-        st.session_state.docs=st.session_state.loader.load() ## Document Loading
-        st.session_state.text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200) ## Chunk Creation
-        st.session_state.final_documents=st.session_state.text_splitter.split_documents(st.session_state.docs[:20]) #splitting
-        st.session_state.vectors=FAISS.from_documents(st.session_state.final_documents,st.session_state.embeddings) #vector OpenAI embeddings
+        # monthly timeline
+        st.title("Monthly Timeline")
+        timeline = helper.monthly_timeline(selected_user,df)
+        fig,ax = plt.subplots()
+        ax.plot(timeline['time'], timeline['message'],color='green')
+        plt.xticks(rotation='vertical')
+        st.pyplot(fig)
+
+        # daily timeline
+        st.title("Daily Timeline")
+        daily_timeline = helper.daily_timeline(selected_user, df)
+        fig, ax = plt.subplots()
+        ax.plot(daily_timeline['only_date'], daily_timeline['message'], color='black')
+        plt.xticks(rotation='vertical')
+        st.pyplot(fig)
+
+        # activity map
+        st.title('Activity Map')
+        col1,col2 = st.columns(2)
+
+        with col1:
+            st.header("Most busy day")
+            busy_day = helper.week_activity_map(selected_user,df)
+            fig,ax = plt.subplots()
+            ax.bar(busy_day.index,busy_day.values,color='purple')
+            plt.xticks(rotation='vertical')
+            st.pyplot(fig)
+
+        with col2:
+            st.header("Most busy month")
+            busy_month = helper.month_activity_map(selected_user, df)
+            fig, ax = plt.subplots()
+            ax.bar(busy_month.index, busy_month.values,color='orange')
+            plt.xticks(rotation='vertical')
+            st.pyplot(fig)
+
+        st.title("Weekly Activity Map")
+        user_heatmap = helper.activity_heatmap(selected_user,df)
+        fig,ax = plt.subplots()
+        ax = sns.heatmap(user_heatmap)
+        st.pyplot(fig)
+
+        # finding the busiest users in the group(Group level)
+        if selected_user == 'Overall':
+            st.title('Most Busy Users')
+            x,new_df = helper.most_busy_users(df)
+            fig, ax = plt.subplots()
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                ax.bar(x.index, x.values,color='red')
+                plt.xticks(rotation='vertical')
+                st.pyplot(fig)
+            with col2:
+                st.dataframe(new_df)
+
+        # WordCloud
+        st.title("Wordcloud")
+        df_wc = helper.create_wordcloud(selected_user,df)
+        fig,ax = plt.subplots()
+        ax.imshow(df_wc)
+        st.pyplot(fig)
+
+        # most common words
+        most_common_df = helper.most_common_words(selected_user,df)
+
+        fig,ax = plt.subplots()
+
+        ax.barh(most_common_df[0],most_common_df[1])
+        plt.xticks(rotation='vertical')
+
+        st.title('Most commmon words')
+        st.pyplot(fig)
+
+        # emoji analysis
+        emoji_df = helper.emoji_helper(selected_user,df)
+        st.title("Emoji Analysis")
+
+        col1,col2 = st.columns(2)
+
+        with col1:
+            st.dataframe(emoji_df)
+        with col2:
+            fig,ax = plt.subplots()
+            ax.pie(emoji_df[1].head(),labels=emoji_df[0].head(),autopct="%0.2f")
+            st.pyplot(fig)
 
 
 
 
 
-prompt1=st.text_input("Enter Your Question From Doduments")
 
-
-if st.button("Documents Embedding"):
-    vector_embedding()
-    st.write("Vector Store DB Is Ready")
-
-import time
-
-
-
-if prompt1:
-    document_chain=create_stuff_documents_chain(llm,prompt)
-    retriever=st.session_state.vectors.as_retriever()
-    retrieval_chain=create_retrieval_chain(retriever,document_chain)
-    start=time.process_time()
-    response=retrieval_chain.invoke({'input':prompt1})
-    print("Response time :",time.process_time()-start)
-    st.write(response['answer'])
-
-    # With a streamlit expander
-    with st.expander("Document Similarity Search"):
-        # Find the relevant chunks
-        for i, doc in enumerate(response["context"]):
-            st.write(doc.page_content)
-            st.write("--------------------------------")
 
 
 
